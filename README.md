@@ -1,4 +1,4 @@
-# GitLab MR Creator
+# Simple GitLab Extension
 
 VS Code extension to quickly create GitLab Merge Requests using the official `glab` CLI with an interactive form.
 
@@ -27,7 +27,7 @@ VS Code extension to quickly create GitLab Merge Requests using the official `gl
    ```
 2. Install in VS Code:
    ```bash
-   code --install-extension glab-mr-creator-0.1.0.vsix
+   code --install-extension simple-gitlab-extension-0.1.0.vsix
    ```
 
 ## Configuration

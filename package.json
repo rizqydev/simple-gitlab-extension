@@ -1,0 +1,109 @@
+{
+  "name": "simple-gitlab-extension",
+  "displayName": "Simple Gitlab Extension",
+  "description": "Create GitLab Merge Requests with glab CLI, custom title, assignee dropdown, and configurable reviewers",
+  "version": "0.1.0",
+  "publisher": "rizqy",
+  "engines": {
+    "vscode": "^1.85.0"
+  },
+  "categories": [
+    "SCM Providers",
+    "Other"
+  ],
+  "main": "./out/extension.js",
+  "activationEvents": [
+    "onCommand:gitlabMr.create"
+  ],
+  "contributes": {
+    "commands": [
+      {
+        "command": "gitlabMr.create",
+        "title": "GitLab: Create Merge Request",
+        "icon": "$(git-pull-request)"
+      }
+    ],
+    "menus": {
+      "commandPalette": [
+        {
+          "command": "gitlabMr.create"
+        }
+      ],
+      "scm/title": [
+        {
+          "command": "gitlabMr.create",
+          "group": "navigation"
+        }
+      ]
+    },
+    "configuration": {
+      "title": "GitLab MR Creator",
+      "properties": {
+        "gitlabMr.target": {
+          "type": "string",
+          "default": "development",
+          "description": "Target branch for merge requests."
+        },
+        "gitlabMr.assignees": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "default": [],
+          "description": "List of assignees shown in the dropdown. Set this in your project's .vscode/settings.json."
+        },
+        "gitlabMr.defaultAssignee": {
+          "type": "string",
+          "default": "",
+          "description": "Default assignee pre-selected in the dropdown."
+        },
+        "gitlabMr.reviewers": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "default": [],
+          "description": "List of reviewers shown in the dropdown. Set this in your project's .vscode/settings.json."
+        },
+        "gitlabMr.defaultReviewer": {
+          "type": "string",
+          "default": "",
+          "description": "Default reviewer pre-selected in the dropdown."
+        },
+        "gitlabMr.labels": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "default": [],
+          "description": "Labels added to the merge request."
+        },
+        "gitlabMr.squash": {
+          "type": "boolean",
+          "default": false,
+          "description": "Squash commits before merge."
+        },
+        "gitlabMr.removeBranch": {
+          "type": "boolean",
+          "default": false,
+          "description": "Delete source branch after merge."
+        },
+        "gitlabMr.openInWeb": {
+          "type": "boolean",
+          "default": true,
+          "description": "Open MR in browser after creation."
+        }
+      }
+    }
+  },
+  "scripts": {
+    "vscode:prepublish": "npm run compile",
+    "compile": "tsc -p ./",
+    "watch": "tsc -watch -p ./"
+  },
+  "devDependencies": {
+    "@types/node": "^20.19.43",
+    "@types/vscode": "^1.85.0",
+    "typescript": "^5.3.3"
+  }
+}
