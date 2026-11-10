@@ -6,6 +6,7 @@ const execAsync = promisify(exec);
 const execFileAsync = promisify(execFile);
 
 function getExecOptions(cwd: string) {
+  const homeDir = process.env.HOME || '';
   const extraPaths = [
     '/opt/homebrew/bin',
     '/usr/local/bin',
@@ -14,7 +15,9 @@ function getExecOptions(cwd: string) {
     '/usr/sbin',
     '/sbin',
     '/opt/homebrew/sbin',
-    '/usr/local/sbin'
+    '/usr/local/sbin',
+    '/snap/bin',
+    homeDir ? `${homeDir}/.local/bin` : ''
   ];
   const currentPath = process.env.PATH || '';
   const pathSeparator = process.platform === 'win32' ? ';' : ':';
@@ -23,6 +26,41 @@ function getExecOptions(cwd: string) {
     cwd,
     env: { ...process.env, PATH: newPath }
   };
+}
+
+async function resolveGitRepoRoot(): Promise<string | undefined> {
+  let targetDir: string | undefined;
+
+  if (vscode.window.activeTextEditor) {
+    const docUri = vscode.window.activeTextEditor.document.uri;
+    const wf = vscode.workspace.getWorkspaceFolder(docUri);
+    if (wf) {
+      targetDir = wf.uri.fsPath;
+    } else if (docUri.scheme === 'file') {
+      targetDir = vscode.Uri.joinPath(docUri, '..').fsPath;
+    }
+  }
+
+  if (!targetDir) {
+    const workspaceFolders = vscode.workspace.workspaceFolders;
+    if (workspaceFolders && workspaceFolders.length > 0) {
+      targetDir = workspaceFolders[0].uri.fsPath;
+    }
+  }
+
+  if (!targetDir) {
+    vscode.window.showErrorMessage('No workspace folder or file open.');
+    return undefined;
+  }
+
+  try {
+    const { stdout } = await execAsync('git rev-parse --show-toplevel', getExecOptions(targetDir));
+    return stdout.trim();
+  } catch (err: any) {
+    const detail = (err.stderr ? err.stderr.trim() : err.message) || 'Unknown git error';
+    vscode.window.showErrorMessage(`Git repository not detected in '${targetDir}': ${detail}`);
+    return undefined;
+  }
 }
 
 interface MRFormData {
@@ -40,25 +78,15 @@ interface MRFormData {
 
 export function activate(context: vscode.ExtensionContext) {
   const disposable = vscode.commands.registerCommand('gitlabMr.create', async () => {
-    const workspaceFolders = vscode.workspace.workspaceFolders;
-    if (!workspaceFolders || workspaceFolders.length === 0) {
-      vscode.window.showErrorMessage('No workspace folder open.');
+    const cwd = await resolveGitRepoRoot();
+    if (!cwd) {
       return;
     }
-
-    const cwd = workspaceFolders[0].uri.fsPath;
 
     try {
       await execAsync('glab --version', getExecOptions(cwd));
     } catch {
       vscode.window.showErrorMessage('glab CLI not found. Please install it (e.g. "brew install glab" on macOS or "winget install glab" on Windows) and ensure it is in PATH.');
-      return;
-    }
-
-    try {
-      await execAsync('git rev-parse --is-inside-work-tree', getExecOptions(cwd));
-    } catch {
-      vscode.window.showErrorMessage('Current workspace is not inside a Git repository.');
       return;
     }
 
@@ -200,18 +228,8 @@ export function activate(context: vscode.ExtensionContext) {
   context.subscriptions.push(disposable);
 
   const tagDisposable = vscode.commands.registerCommand('gitlabTag.create', async () => {
-    const workspaceFolders = vscode.workspace.workspaceFolders;
-    if (!workspaceFolders || workspaceFolders.length === 0) {
-      vscode.window.showErrorMessage('No workspace folder open.');
-      return;
-    }
-
-    const cwd = workspaceFolders[0].uri.fsPath;
-
-    try {
-      await execAsync('git rev-parse --is-inside-work-tree', getExecOptions(cwd));
-    } catch {
-      vscode.window.showErrorMessage('Current workspace is not inside a Git repository.');
+    const cwd = await resolveGitRepoRoot();
+    if (!cwd) {
       return;
     }
 
