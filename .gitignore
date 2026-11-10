@@ -2,5 +2,6 @@ node_modules/
 out/
 *.vsix
 .vscode-test/
+.vscode/
 .DS_Store
 Thumbs.db
