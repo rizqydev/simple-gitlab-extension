@@ -17,25 +17,38 @@
   ],
   "main": "./out/extension.js",
   "activationEvents": [
-    "onCommand:gitlabMr.create"
+    "onCommand:gitlabMr.create",
+    "onCommand:gitlabTag.create"
   ],
   "contributes": {
     "commands": [
       {
         "command": "gitlabMr.create",
-        "title": "GitLab: Create Merge Request",
+        "title": "SGE: Create Merge Request",
         "icon": "$(git-pull-request)"
+      },
+      {
+        "command": "gitlabTag.create",
+        "title": "SGE: Create Tag",
+        "icon": "$(tag)"
       }
     ],
     "menus": {
       "commandPalette": [
         {
           "command": "gitlabMr.create"
+        },
+        {
+          "command": "gitlabTag.create"
         }
       ],
       "scm/title": [
         {
           "command": "gitlabMr.create",
+          "group": "navigation"
+        },
+        {
+          "command": "gitlabTag.create",
           "group": "navigation"
         }
       ]

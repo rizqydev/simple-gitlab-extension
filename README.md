@@ -55,13 +55,23 @@ Configure options globally in VS Code Settings (`Ctrl+,`) or per workspace in `.
 
 ## Usage
 
+### Create Merge Request
 1. Open a Git project on a feature branch.
 2. Open the Command Palette (`Ctrl+Shift+P`) and run:
    ```
-   GitLab: Create Merge Request
+   SGE: Create Merge Request
    ```
    *(Or click the pull request icon in the Source Control panel header).*
 3. Fill in or review the details and click **Create Merge Request**.
+
+### Create New Tag
+1. Open the Command Palette (`Ctrl+Shift+P`) and run:
+   ```
+   SGE: Create Tag
+   ```
+   *(Or click the tag icon in the Source Control panel header).*
+2. Enter the **Tag name**, choose the branch in **Create from** (defaults to the active branch), and optionally enter a **Message**.
+3. Click **Create tag**. A confirmation prompt will ask if you want to push the newly created tag to `origin`.
 
 ## License
 
