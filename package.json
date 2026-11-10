@@ -2,7 +2,7 @@
   "name": "simple-gitlab-extension",
   "displayName": "Simple Gitlab Extension",
   "description": "Create GitLab Merge Requests with glab CLI, custom title, assignee dropdown, and configurable reviewers",
-  "version": "0.1.0",
+  "version": "0.0.0",
   "publisher": "rizqy",
   "repository": {
     "type": "git",
