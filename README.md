@@ -13,10 +13,8 @@ VS Code extension to quickly create GitLab Merge Requests using the official `gl
 
 1. [Git](https://git-scm.com/) installed and repository initialized.
 2. [GitLab CLI (`glab`)](https://gitlab.com/gitlab-org/cli) installed and authenticated:
-   ```bash
-   winget install glab
-   glab auth login
-   ```
+   - **macOS**: `brew install glab && glab auth login`
+   - **Windows**: `winget install glab && glab auth login`
 
 ## Installation
 

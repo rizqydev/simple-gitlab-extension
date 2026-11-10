@@ -5,6 +5,26 @@ import { promisify } from 'util';
 const execAsync = promisify(exec);
 const execFileAsync = promisify(execFile);
 
+function getExecOptions(cwd: string) {
+  const extraPaths = [
+    '/opt/homebrew/bin',
+    '/usr/local/bin',
+    '/usr/bin',
+    '/bin',
+    '/usr/sbin',
+    '/sbin',
+    '/opt/homebrew/sbin',
+    '/usr/local/sbin'
+  ];
+  const currentPath = process.env.PATH || '';
+  const pathSeparator = process.platform === 'win32' ? ';' : ':';
+  const newPath = [currentPath, ...extraPaths].filter(Boolean).join(pathSeparator);
+  return {
+    cwd,
+    env: { ...process.env, PATH: newPath }
+  };
+}
+
 interface MRFormData {
   title: string;
   description: string;
@@ -29,14 +49,14 @@ export function activate(context: vscode.ExtensionContext) {
     const cwd = workspaceFolders[0].uri.fsPath;
 
     try {
-      await execAsync('glab --version', { cwd });
+      await execAsync('glab --version', getExecOptions(cwd));
     } catch {
-      vscode.window.showErrorMessage('glab CLI not found. Please install it (e.g. winget install glab) and ensure it is in PATH.');
+      vscode.window.showErrorMessage('glab CLI not found. Please install it (e.g. "brew install glab" on macOS or "winget install glab" on Windows) and ensure it is in PATH.');
       return;
     }
 
     try {
-      await execAsync('git rev-parse --is-inside-work-tree', { cwd });
+      await execAsync('git rev-parse --is-inside-work-tree', getExecOptions(cwd));
     } catch {
       vscode.window.showErrorMessage('Current workspace is not inside a Git repository.');
       return;
@@ -49,13 +69,13 @@ export function activate(context: vscode.ExtensionContext) {
     const defaultTarget = config.get<string>('target', 'development');
 
     try {
-      const { stdout: branchOut } = await execAsync('git rev-parse --abbrev-ref HEAD', { cwd });
+      const { stdout: branchOut } = await execAsync('git rev-parse --abbrev-ref HEAD', getExecOptions(cwd));
       currentBranch = branchOut.trim();
 
-      const { stdout: commitOut } = await execAsync('git log -1 --pretty=%B', { cwd });
+      const { stdout: commitOut } = await execAsync('git log -1 --pretty=%B', getExecOptions(cwd));
       lastCommitMsg = commitOut.trim().split('\n')[0];
 
-      const { stdout: listOut } = await execAsync('git branch -a --format="%(refname:short)"', { cwd });
+      const { stdout: listOut } = await execAsync('git branch -a --format="%(refname:short)"', getExecOptions(cwd));
       const rawBranches = listOut.split('\n').map(b => b.trim()).filter(Boolean);
       const cleanBranches = rawBranches
         .map(b => b.replace(/^origin\//, ''))
@@ -81,7 +101,7 @@ export function activate(context: vscode.ExtensionContext) {
     }
 
     try {
-      const { stdout: statusOut } = await execAsync('git status --porcelain', { cwd });
+      const { stdout: statusOut } = await execAsync('git status --porcelain', getExecOptions(cwd));
       if (statusOut.trim().length > 0) {
         vscode.window.showWarningMessage('You have uncommitted changes. They will not be included in the MR.');
       }
@@ -125,7 +145,7 @@ export function activate(context: vscode.ExtensionContext) {
           async () => {
             try {
               // 1. Git push
-              await execAsync(`git push -u origin "${currentBranch}"`, { cwd });
+              await execAsync(`git push -u origin "${currentBranch}"`, getExecOptions(cwd));
 
               // 2. Build glab arguments as an array for execFile (avoids Windows cmd quote escaping bugs)
               const args: string[] = [
@@ -159,7 +179,7 @@ export function activate(context: vscode.ExtensionContext) {
                 args.push('--remove-source-branch');
               }
 
-              const { stdout } = await execFileAsync('glab', args, { cwd });
+              const { stdout } = await execFileAsync('glab', args, getExecOptions(cwd));
 
               // Extract MR URL if present in output to open or link
               const mrUrlMatch = stdout.match(/https?:\/\/[^\s]+/);
@@ -189,7 +209,7 @@ export function activate(context: vscode.ExtensionContext) {
     const cwd = workspaceFolders[0].uri.fsPath;
 
     try {
-      await execAsync('git rev-parse --is-inside-work-tree', { cwd });
+      await execAsync('git rev-parse --is-inside-work-tree', getExecOptions(cwd));
     } catch {
       vscode.window.showErrorMessage('Current workspace is not inside a Git repository.');
       return;
@@ -202,19 +222,19 @@ export function activate(context: vscode.ExtensionContext) {
 
     // Fetch latest tags and remote branches from origin so we're in sync
     try {
-      await execAsync('git fetch origin --tags', { cwd });
+      await execAsync('git fetch origin --tags', getExecOptions(cwd));
     } catch {
       // ignore if offline
     }
 
     try {
-      const { stdout: branchOut } = await execAsync('git rev-parse --abbrev-ref HEAD', { cwd });
+      const { stdout: branchOut } = await execAsync('git rev-parse --abbrev-ref HEAD', getExecOptions(cwd));
       currentBranch = branchOut.trim();
 
       // Remote branches from origin
       let cleanRemote: string[] = [];
       try {
-        const { stdout: remoteOut } = await execAsync('git branch -r --format="%(refname:short)"', { cwd });
+        const { stdout: remoteOut } = await execAsync('git branch -r --format="%(refname:short)"', getExecOptions(cwd));
         cleanRemote = remoteOut.split('\n')
           .map(b => b.trim())
           .filter(b => b && b !== 'origin' && !b.includes('HEAD'))
@@ -224,7 +244,7 @@ export function activate(context: vscode.ExtensionContext) {
       }
 
       // Local branches
-      const { stdout: localOut } = await execAsync('git branch --format="%(refname:short)"', { cwd });
+      const { stdout: localOut } = await execAsync('git branch --format="%(refname:short)"', getExecOptions(cwd));
       const cleanLocal = localOut.split('\n').map(b => b.trim()).filter(Boolean);
 
       // Default to 'development' if available, otherwise current branch
@@ -237,7 +257,7 @@ export function activate(context: vscode.ExtensionContext) {
 
       branches = Array.from(new Set([defaultBranch, ...cleanRemote, ...cleanLocal]));
 
-      const { stdout: tagOut } = await execAsync('git for-each-ref --count=3 --sort=-v:refname --format="%(refname:short)" refs/tags', { cwd });
+      const { stdout: tagOut } = await execAsync('git for-each-ref --count=3 --sort=-v:refname --format="%(refname:short)" refs/tags', getExecOptions(cwd));
       latestTags = tagOut.split('\n').map(t => t.trim()).filter(Boolean);
     } catch (e: any) {
       vscode.window.showErrorMessage(`Failed reading git info: ${e.message}`);
@@ -279,7 +299,7 @@ export function activate(context: vscode.ExtensionContext) {
             try {
               // Ensure origin is up-to-date for the selected branch/tag
               try {
-                await execAsync('git fetch origin --tags', { cwd });
+                await execAsync('git fetch origin --tags', getExecOptions(cwd));
               } catch {
                 // ignore if offline
               }
@@ -287,7 +307,7 @@ export function activate(context: vscode.ExtensionContext) {
               // Resolve to origin/<createFrom> if it exists on origin
               let targetRef = createFrom;
               try {
-                await execAsync(`git rev-parse --verify "origin/${createFrom}"`, { cwd });
+                await execAsync(`git rev-parse --verify "origin/${createFrom}"`, getExecOptions(cwd));
                 targetRef = `origin/${createFrom}`;
               } catch {
                 // If not found on origin, use createFrom directly (local branch/tag/SHA)
@@ -302,7 +322,7 @@ export function activate(context: vscode.ExtensionContext) {
                 tagArgs.push(tagName, targetRef);
               }
 
-              await execFileAsync('git', tagArgs, { cwd });
+              await execFileAsync('git', tagArgs, getExecOptions(cwd));
 
               // 2. Prompt for push confirmation
               const pushChoice = await vscode.window.showInformationMessage(
@@ -319,7 +339,7 @@ export function activate(context: vscode.ExtensionContext) {
                     cancellable: false
                   },
                   async () => {
-                    await execAsync(`git push origin "${tagName}"`, { cwd });
+                    await execAsync(`git push origin "${tagName}"`, getExecOptions(cwd));
                     vscode.window.showInformationMessage(`Tag '${tagName}' pushed to origin successfully!`);
                   }
                 );
