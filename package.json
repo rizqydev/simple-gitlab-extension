@@ -4,6 +4,10 @@
   "description": "Create GitLab Merge Requests with glab CLI, custom title, assignee dropdown, and configurable reviewers",
   "version": "0.1.0",
   "publisher": "rizqy",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/rizqydev/simple-gitlab-extension.git"
+  },
   "engines": {
     "vscode": "^1.85.0"
   },

@@ -23,7 +23,7 @@ jobs:
         run: npm ci
 
       - name: Package extension
-        run: npx @vscode/vsce package --allow-missing-repository
+        run: npx @vscode/vsce package
 
       - name: Create GitHub Release & Upload VSIX
         uses: softprops/action-gh-release@v2
