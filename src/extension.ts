@@ -63,6 +63,85 @@ async function resolveGitRepoRoot(): Promise<string | undefined> {
   }
 }
 
+interface GitlabProjectInfo {
+  host: string;
+  projectPath: string;
+}
+
+export function parseGitlabRemote(url: string): GitlabProjectInfo | undefined {
+  const cleaned = url.trim().replace(/\.git$/, '');
+
+  if (cleaned.startsWith('git@')) {
+    const colonIdx = cleaned.indexOf(':');
+    if (colonIdx !== -1) {
+      const host = cleaned.substring(4, colonIdx);
+      const projectPath = cleaned.substring(colonIdx + 1).replace(/^\/+/, '');
+      return { host: `https://${host}`, projectPath };
+    }
+  }
+
+  try {
+    const parsed = new URL(cleaned);
+    if (parsed.protocol === 'ssh:') {
+      return { host: `https://${parsed.hostname}`, projectPath: parsed.pathname.replace(/^\/+/, '') };
+    }
+    return { host: `${parsed.protocol}//${parsed.host}`, projectPath: parsed.pathname.replace(/^\/+/, '') };
+  } catch {
+    const match = cleaned.match(/^(?:[\w-]+@)?([^:]+):(.+)$/);
+    if (match) {
+      return { host: `https://${match[1]}`, projectPath: match[2].replace(/^\/+/, '') };
+    }
+  }
+
+  return undefined;
+}
+
+async function getGitlabToken(context: vscode.ExtensionContext, promptIfMissing = false): Promise<string | undefined> {
+  let token = await context.secrets.get('gitlabToken');
+  if (!token) {
+    const config = vscode.workspace.getConfiguration('gitlabMr');
+    token = config.get<string>('token', '');
+  }
+
+  if (!token && promptIfMissing) {
+    const input = await vscode.window.showInputBox({
+      title: 'GitLab Personal Access Token',
+      prompt: 'Enter your GitLab Personal Access Token (requires "api" scope)',
+      password: true,
+      ignoreFocusOut: true
+    });
+    if (input && input.trim()) {
+      token = input.trim();
+      await context.secrets.store('gitlabToken', token);
+      vscode.window.showInformationMessage('GitLab Personal Access Token saved securely.');
+    }
+  }
+
+  return token || undefined;
+}
+
+async function getUserIdByUsername(apiBase: string, token: string, username: string): Promise<number | undefined> {
+  if (!username) {
+    return undefined;
+  }
+  try {
+    const res = await fetch(`${apiBase}/api/v4/users?username=${encodeURIComponent(username)}`, {
+      headers: { 'PRIVATE-TOKEN': token }
+    });
+    if (!res.ok) {
+      return undefined;
+    }
+    const users = (await res.json()) as Array<{ id: number; username: string }>;
+    if (Array.isArray(users) && users.length > 0) {
+      const match = users.find(u => u.username.toLowerCase() === username.toLowerCase());
+      return match ? match.id : users[0].id;
+    }
+  } catch {
+    // ignore
+  }
+  return undefined;
+}
+
 interface MRFormData {
   title: string;
   description: string;
@@ -93,6 +172,28 @@ export function activate(context: vscode.ExtensionContext) {
     await sidebarProvider.showTag();
   });
   context.subscriptions.push(tagDisposable);
+
+  const setTokenDisposable = vscode.commands.registerCommand('gitlab.setToken', async () => {
+    const hasCurrent = !!(await context.secrets.get('gitlabToken'));
+    const input = await vscode.window.showInputBox({
+      title: 'GitLab Personal Access Token',
+      prompt: hasCurrent
+        ? 'Enter a new GitLab Personal Access Token, or leave blank to remove'
+        : 'Enter your GitLab Personal Access Token (requires "api" scope)',
+      password: true,
+      ignoreFocusOut: true
+    });
+    if (input !== undefined) {
+      if (input.trim()) {
+        await context.secrets.store('gitlabToken', input.trim());
+        vscode.window.showInformationMessage('GitLab Personal Access Token saved securely.');
+      } else if (hasCurrent) {
+        await context.secrets.delete('gitlabToken');
+        vscode.window.showInformationMessage('GitLab Personal Access Token removed.');
+      }
+    }
+  });
+  context.subscriptions.push(setTokenDisposable);
 }
 
 class GitlabSidebarProvider implements vscode.WebviewViewProvider {
@@ -167,11 +268,20 @@ class GitlabSidebarProvider implements vscode.WebviewViewProvider {
       return;
     }
 
+    let remoteUrl = '';
     try {
-      await execAsync('glab --version', getExecOptions(cwd));
+      const { stdout } = await execAsync('git remote get-url origin', getExecOptions(cwd));
+      remoteUrl = stdout.trim();
     } catch {
-      vscode.window.showErrorMessage('glab CLI not found. Please install it (e.g. "brew install glab" on macOS or "winget install glab" on Windows) and ensure it is in PATH.');
-      this._view?.webview.postMessage({ command: 'reset', message: 'glab CLI not found.' });
+      vscode.window.showErrorMessage('No "origin" git remote found.');
+      this._view?.webview.postMessage({ command: 'reset', message: 'No "origin" git remote found.' });
+      return;
+    }
+
+    const projectInfo = parseGitlabRemote(remoteUrl);
+    if (!projectInfo) {
+      vscode.window.showErrorMessage(`Could not parse GitLab project from remote URL: ${remoteUrl}`);
+      this._view?.webview.postMessage({ command: 'reset', message: 'Invalid GitLab remote URL.' });
       return;
     }
 
@@ -334,6 +444,27 @@ class GitlabSidebarProvider implements vscode.WebviewViewProvider {
       return;
     }
 
+    let remoteUrl = '';
+    try {
+      const { stdout } = await execAsync('git remote get-url origin', getExecOptions(cwd));
+      remoteUrl = stdout.trim();
+    } catch {
+      vscode.window.showErrorMessage('No "origin" git remote found.');
+      return;
+    }
+
+    const projectInfo = parseGitlabRemote(remoteUrl);
+    if (!projectInfo) {
+      vscode.window.showErrorMessage(`Could not parse GitLab project from remote URL: ${remoteUrl}`);
+      return;
+    }
+
+    const token = await getGitlabToken(this._context, true);
+    if (!token) {
+      vscode.window.showErrorMessage('GitLab Personal Access Token is required to create a Merge Request.');
+      return;
+    }
+
     let currentBranch = '';
     try {
       const { stdout: branchOut } = await execAsync('git rev-parse --abbrev-ref HEAD', getExecOptions(cwd));
@@ -351,49 +482,76 @@ class GitlabSidebarProvider implements vscode.WebviewViewProvider {
       },
       async () => {
         try {
-          // 1. Git push
+          // 1. Push current branch to origin
           await execAsync(`git push -u origin "${currentBranch}"`, getExecOptions(cwd));
 
-          // 2. Build glab arguments as an array for execFile
-          const args: string[] = [
-            'mr', 'create',
-            '-t', data.title,
-            '--source-branch', currentBranch,
-            '--target-branch', data.target,
-          ];
-
-          if (data.description && data.description.trim()) {
-            args.push('--description', data.description);
-          } else {
-            args.push('--description', ' ');
-          }
+          // 2. Resolve assignee & reviewer IDs if configured
+          let assigneeId: number | undefined;
           if (data.assignee) {
-            args.push('--assignee', data.assignee);
+            assigneeId = await getUserIdByUsername(projectInfo.host, token, data.assignee);
+            if (!assigneeId) {
+              vscode.window.showWarningMessage(`Could not resolve GitLab user ID for assignee '${data.assignee}'. MR will be created without this assignee.`);
+            }
           }
+
+          let reviewerId: number | undefined;
           if (data.reviewer) {
-            args.push('--reviewer', data.reviewer);
+            reviewerId = await getUserIdByUsername(projectInfo.host, token, data.reviewer);
+            if (!reviewerId) {
+              vscode.window.showWarningMessage(`Could not resolve GitLab user ID for reviewer '${data.reviewer}'. MR will be created without this reviewer.`);
+            }
+          }
+
+          let mrTitle = data.title;
+          if (data.draft && !mrTitle.toLowerCase().startsWith('draft:') && !mrTitle.toLowerCase().startsWith('wip:')) {
+            mrTitle = `Draft: ${mrTitle}`;
+          }
+
+          // 3. Prepare payload for GitLab API
+          const payload: Record<string, any> = {
+            source_branch: currentBranch,
+            target_branch: data.target,
+            title: mrTitle,
+            description: data.description || '',
+            squash: data.squash,
+            remove_source_branch: data.removeBranch
+          };
+
+          if (assigneeId !== undefined) {
+            payload.assignee_ids = [assigneeId];
+          }
+          if (reviewerId !== undefined) {
+            payload.reviewer_ids = [reviewerId];
           }
           if (data.labels && data.labels.length > 0) {
-            args.push('--label', data.labels.join(','));
-          }
-          if (data.draft) {
-            args.push('--draft');
-          }
-          if (data.squash) {
-            args.push('--squash-before-merge');
-          }
-          if (data.removeBranch) {
-            args.push('--remove-source-branch');
+            payload.labels = data.labels.join(',');
           }
 
-          const { stdout } = await execFileAsync('glab', args, getExecOptions(cwd));
+          // 4. Send request to GitLab REST API
+          const endpoint = `${projectInfo.host}/api/v4/projects/${encodeURIComponent(projectInfo.projectPath)}/merge_requests`;
+          const res = await fetch(endpoint, {
+            method: 'POST',
+            headers: {
+              'Content-Type': 'application/json',
+              'PRIVATE-TOKEN': token
+            },
+            body: JSON.stringify(payload)
+          });
 
-          const mrUrlMatch = stdout.match(/https?:\/\/[^\s]+/);
-          if (data.openInWeb && mrUrlMatch) {
-            vscode.env.openExternal(vscode.Uri.parse(mrUrlMatch[0]));
+          const resData = (await res.json()) as any;
+
+          if (!res.ok) {
+            const errorMsg = Array.isArray(resData.message)
+              ? resData.message.join(', ')
+              : (resData.message || resData.error || res.statusText);
+            throw new Error(`GitLab API error (${res.status}): ${typeof errorMsg === 'object' ? JSON.stringify(errorMsg) : errorMsg}`);
           }
 
-          vscode.window.showInformationMessage(`Merge Request created successfully!\n${stdout}`);
+          if (data.openInWeb && resData.web_url) {
+            vscode.env.openExternal(vscode.Uri.parse(resData.web_url));
+          }
+
+          vscode.window.showInformationMessage(`Merge Request created successfully!\n${resData.web_url || ''}`);
         } catch (err: any) {
           vscode.window.showErrorMessage(`Failed creating MR: ${err.message}`);
         }

@@ -1,7 +1,7 @@
 {
   "name": "simple-gitlab-extension",
   "displayName": "Simple Gitlab Extension",
-  "description": "Create GitLab Merge Requests with glab CLI, custom title, assignee dropdown, and configurable reviewers",
+  "description": "Create GitLab Merge Requests and Tags with native GitLab API and interactive forms",
   "version": "0.0.0",
   "publisher": "rizqy",
   "repository": {
@@ -19,6 +19,7 @@
   "activationEvents": [
     "onCommand:gitlabMr.create",
     "onCommand:gitlabTag.create",
+    "onCommand:gitlab.setToken",
     "onView:simpleGitlab.sidebarView"
   ],
   "contributes": {
@@ -50,6 +51,11 @@
         "command": "gitlabTag.create",
         "title": "SGE: Create Tag",
         "icon": "$(tag)"
+      },
+      {
+        "command": "gitlab.setToken",
+        "title": "SGE: Set GitLab Personal Access Token",
+        "icon": "$(key)"
       }
     ],
     "menus": {
@@ -59,6 +65,9 @@
         },
         {
           "command": "gitlabTag.create"
+        },
+        {
+          "command": "gitlab.setToken"
         }
       ],
       "scm/title": [
@@ -81,12 +90,22 @@
           "command": "gitlabTag.create",
           "when": "view == simpleGitlab.sidebarView",
           "group": "navigation@2"
+        },
+        {
+          "command": "gitlab.setToken",
+          "when": "view == simpleGitlab.sidebarView",
+          "group": "navigation@3"
         }
       ]
     },
     "configuration": {
       "title": "GitLab MR Creator",
       "properties": {
+        "gitlabMr.token": {
+          "type": "string",
+          "default": "",
+          "description": "GitLab Personal Access Token. Can also be set securely via 'SGE: Set GitLab Personal Access Token'."
+        },
         "gitlabMr.target": {
           "type": "string",
           "default": "development",
@@ -148,7 +167,7 @@
     "vscode:prepublish": "npm run compile",
     "compile": "tsc -p ./",
     "watch": "tsc -watch -p ./",
-    "test": "npm run compile"
+    "test": "npm run compile && node test/remote.test.js"
   },
   "devDependencies": {
     "@types/node": "^20.19.43",
