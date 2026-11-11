@@ -18,9 +18,28 @@
   "main": "./out/extension.js",
   "activationEvents": [
     "onCommand:gitlabMr.create",
-    "onCommand:gitlabTag.create"
+    "onCommand:gitlabTag.create",
+    "onView:simpleGitlab.sidebarView"
   ],
   "contributes": {
+    "viewsContainers": {
+      "activitybar": [
+        {
+          "id": "simple-gitlab",
+          "title": "Simple GitLab",
+          "icon": "resources/gitlab.svg"
+        }
+      ]
+    },
+    "views": {
+      "simple-gitlab": [
+        {
+          "type": "webview",
+          "id": "simpleGitlab.sidebarView",
+          "name": "Simple GitLab"
+        }
+      ]
+    },
     "commands": [
       {
         "command": "gitlabMr.create",
@@ -50,6 +69,18 @@
         {
           "command": "gitlabTag.create",
           "group": "navigation"
+        }
+      ],
+      "view/title": [
+        {
+          "command": "gitlabMr.create",
+          "when": "view == simpleGitlab.sidebarView",
+          "group": "navigation@1"
+        },
+        {
+          "command": "gitlabTag.create",
+          "when": "view == simpleGitlab.sidebarView",
+          "group": "navigation@2"
         }
       ]
     },
@@ -117,7 +148,7 @@
     "vscode:prepublish": "npm run compile",
     "compile": "tsc -p ./",
     "watch": "tsc -watch -p ./",
-    "test": "npm run compile && node test/tags.test.js"
+    "test": "npm run compile"
   },
   "devDependencies": {
     "@types/node": "^20.19.43",
