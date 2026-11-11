@@ -238,49 +238,73 @@ export function activate(context: vscode.ExtensionContext) {
     let latestTags: string[] = [];
     let defaultBranch = '';
 
-    // Fetch latest tags and remote branches from origin so we're in sync
-    try {
-      await execAsync('git fetch origin --tags', getExecOptions(cwd));
-    } catch {
-      // ignore if offline
-    }
+    await vscode.window.withProgress(
+      {
+        location: vscode.ProgressLocation.Notification,
+        title: 'Fetching latest tags from remote repository...',
+        cancellable: false
+      },
+      async () => {
+        let remote = 'origin';
+        try {
+          const { stdout: remotesOut } = await execAsync('git remote', getExecOptions(cwd));
+          const remotes = remotesOut.split('\n').map(r => r.trim()).filter(Boolean);
+          if (remotes.length > 0 && !remotes.includes('origin')) {
+            remote = remotes[0];
+          }
+        } catch {
+          // ignore
+        }
 
-    try {
-      const { stdout: branchOut } = await execAsync('git rev-parse --abbrev-ref HEAD', getExecOptions(cwd));
-      currentBranch = branchOut.trim();
+        // 1. Fetch latest tags and remote branches from remote
+        try {
+          await execAsync(`git fetch ${remote} --tags --force`, getExecOptions(cwd));
+        } catch {
+          // ignore if offline
+        }
 
-      // Remote branches from origin
-      let cleanRemote: string[] = [];
-      try {
-        const { stdout: remoteOut } = await execAsync('git branch -r --format="%(refname:short)"', getExecOptions(cwd));
-        cleanRemote = remoteOut.split('\n')
-          .map(b => b.trim())
-          .filter(b => b && b !== 'origin' && !b.includes('HEAD'))
-          .map(b => b.replace(/^origin\//, ''));
-      } catch {
-        // ignore
+
+        try {
+          const { stdout: tagOut } = await execAsync('git for-each-ref --sort=-creatordate --count=5 --format="%(refname:short)" refs/tags', getExecOptions(cwd));
+          latestTags = tagOut.split('\n').map(t => t.trim()).filter(Boolean);
+        } catch {
+          // ignore
+        }
+
+        try {
+          const { stdout: branchOut } = await execAsync('git rev-parse --abbrev-ref HEAD', getExecOptions(cwd));
+          currentBranch = branchOut.trim();
+
+          // Remote branches from remote
+          let cleanRemote: string[] = [];
+          try {
+            const { stdout: remoteOut } = await execAsync('git branch -r --format="%(refname:short)"', getExecOptions(cwd));
+            cleanRemote = remoteOut.split('\n')
+              .map(b => b.trim())
+              .filter(b => b && b !== remote && !b.includes('HEAD'))
+              .map(b => b.replace(new RegExp(`^${remote}\\/`), ''));
+          } catch {
+            // ignore
+          }
+
+          // Local branches
+          const { stdout: localOut } = await execAsync('git branch --format="%(refname:short)"', getExecOptions(cwd));
+          const cleanLocal = localOut.split('\n').map(b => b.trim()).filter(Boolean);
+
+          // Default to 'development' if available, otherwise current branch
+          defaultBranch = currentBranch;
+          if (cleanRemote.includes('development') || cleanLocal.includes('development')) {
+            defaultBranch = 'development';
+          } else if (cleanRemote.includes(currentBranch) || cleanLocal.includes(currentBranch)) {
+            defaultBranch = currentBranch;
+          }
+
+          branches = Array.from(new Set([defaultBranch, ...cleanRemote, ...cleanLocal]));
+        } catch (e: any) {
+          vscode.window.showErrorMessage(`Failed reading git info: ${e.message}`);
+        }
       }
-
-      // Local branches
-      const { stdout: localOut } = await execAsync('git branch --format="%(refname:short)"', getExecOptions(cwd));
-      const cleanLocal = localOut.split('\n').map(b => b.trim()).filter(Boolean);
-
-      // Default to 'development' if available, otherwise current branch
-      defaultBranch = currentBranch;
-      if (cleanRemote.includes('development') || cleanLocal.includes('development')) {
-        defaultBranch = 'development';
-      } else if (cleanRemote.includes(currentBranch) || cleanLocal.includes(currentBranch)) {
-        defaultBranch = currentBranch;
-      }
-
-      branches = Array.from(new Set([defaultBranch, ...cleanRemote, ...cleanLocal]));
-
-      const { stdout: tagOut } = await execAsync('git for-each-ref --count=3 --sort=-v:refname --format="%(refname:short)" refs/tags', getExecOptions(cwd));
-      latestTags = tagOut.split('\n').map(t => t.trim()).filter(Boolean);
-    } catch (e: any) {
-      vscode.window.showErrorMessage(`Failed reading git info: ${e.message}`);
-      return;
-    }
+    );
 
     const panel = vscode.window.createWebviewPanel(
       'gitlabTagCreate',
@@ -317,7 +341,7 @@ export function activate(context: vscode.ExtensionContext) {
             try {
               // Ensure origin is up-to-date for the selected branch/tag
               try {
-                await execAsync('git fetch origin --tags', getExecOptions(cwd));
+                await execAsync('git fetch origin --tags --force', getExecOptions(cwd));
               } catch {
                 // ignore if offline
               }

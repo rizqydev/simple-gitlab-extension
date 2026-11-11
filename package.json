@@ -116,7 +116,8 @@
   "scripts": {
     "vscode:prepublish": "npm run compile",
     "compile": "tsc -p ./",
-    "watch": "tsc -watch -p ./"
+    "watch": "tsc -watch -p ./",
+    "test": "npm run compile && node test/tags.test.js"
   },
   "devDependencies": {
     "@types/node": "^20.19.43",
