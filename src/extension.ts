@@ -63,6 +63,21 @@ async function resolveGitRepoRoot(): Promise<string | undefined> {
   }
 }
 
+async function getGitRemoteUrl(cwd: string): Promise<string | undefined> {
+  let remote = 'origin';
+  try {
+    const { stdout: remotesOut } = await execAsync('git remote', getExecOptions(cwd));
+    const remotes = remotesOut.split('\n').map(r => r.trim()).filter(Boolean);
+    if (remotes.length > 0 && !remotes.includes('origin')) {
+      remote = remotes[0];
+    }
+    const { stdout } = await execAsync(`git remote get-url ${remote}`, getExecOptions(cwd));
+    return stdout.trim();
+  } catch {
+    return undefined;
+  }
+}
+
 interface GitlabProjectInfo {
   host: string;
   projectPath: string;
@@ -140,6 +155,36 @@ async function getUserIdByUsername(apiBase: string, token: string, username: str
     // ignore
   }
   return undefined;
+}
+
+async function uploadProjectFile(apiBase: string, projectPath: string, token: string, fileData: { name: string; mimeType: string; base64: string }): Promise<string> {
+  const endpoint = `${apiBase}/api/v4/projects/${encodeURIComponent(projectPath)}/uploads`;
+  const buffer = Buffer.from(fileData.base64, 'base64');
+  const blob = new Blob([buffer], { type: fileData.mimeType || 'image/png' });
+  
+  const formData = new FormData();
+  formData.append('file', blob, fileData.name || 'image.png');
+
+  const res = await fetch(endpoint, {
+    method: 'POST',
+    headers: {
+      'PRIVATE-TOKEN': token
+    },
+    body: formData
+  });
+
+  if (!res.ok) {
+    const errText = await res.text();
+    throw new Error(`Upload failed (${res.status}): ${errText}`);
+  }
+
+  const data = (await res.json()) as any;
+  let md = data.markdown;
+  if (!md && data.url) {
+    const url = data.url.startsWith('http') ? data.url : `${apiBase}${data.url}`;
+    md = `![${fileData.name || 'image'}](${url})`;
+  }
+  return md || `![image](${data.url || ''})`;
 }
 
 interface MRFormData {
@@ -225,6 +270,8 @@ class GitlabSidebarProvider implements vscode.WebviewViewProvider {
         await this.submitMr(message.data);
       } else if (message.command === 'submitTag') {
         await this.submitTag(message.data);
+      } else if (message.command === 'uploadImage') {
+        await this.handleImageUpload(message.file);
       } else if (message.command === 'cancel') {
         this.clearForm();
       }
@@ -268,13 +315,10 @@ class GitlabSidebarProvider implements vscode.WebviewViewProvider {
       return;
     }
 
-    let remoteUrl = '';
-    try {
-      const { stdout } = await execAsync('git remote get-url origin', getExecOptions(cwd));
-      remoteUrl = stdout.trim();
-    } catch {
-      vscode.window.showErrorMessage('No "origin" git remote found.');
-      this._view?.webview.postMessage({ command: 'reset', message: 'No "origin" git remote found.' });
+    const remoteUrl = await getGitRemoteUrl(cwd);
+    if (!remoteUrl) {
+      vscode.window.showErrorMessage('No git remote found.');
+      this._view?.webview.postMessage({ command: 'reset', message: 'No git remote found.' });
       return;
     }
 
@@ -438,18 +482,59 @@ class GitlabSidebarProvider implements vscode.WebviewViewProvider {
     this._view?.webview.postMessage({ command: 'render', tab: 'tag', html });
   }
 
+  private async handleImageUpload(fileData: { name: string; mimeType: string; base64: string; placeholder: string }) {
+    const cwd = await resolveGitRepoRoot();
+    if (!cwd) {
+      return;
+    }
+
+    const remoteUrl = await getGitRemoteUrl(cwd);
+    if (!remoteUrl) {
+      return;
+    }
+
+    const projectInfo = parseGitlabRemote(remoteUrl);
+    if (!projectInfo) {
+      return;
+    }
+
+    const token = await getGitlabToken(this._context, false);
+    if (!token) {
+      vscode.window.showErrorMessage('GitLab Personal Access Token required to upload images.');
+      this._view?.webview.postMessage({
+        command: 'replacePlaceholder',
+        placeholder: fileData.placeholder,
+        markdown: ''
+      });
+      return;
+    }
+
+    try {
+      const markdown = await uploadProjectFile(projectInfo.host, projectInfo.projectPath, token, fileData);
+      this._view?.webview.postMessage({
+        command: 'replacePlaceholder',
+        placeholder: fileData.placeholder,
+        markdown: markdown + '\n'
+      });
+    } catch (err: any) {
+      vscode.window.showErrorMessage(`Failed uploading image: ${err.message}`);
+      this._view?.webview.postMessage({
+        command: 'replacePlaceholder',
+        placeholder: fileData.placeholder,
+        markdown: ''
+      });
+    }
+  }
+
   private async submitMr(data: MRFormData) {
     const cwd = await resolveGitRepoRoot();
     if (!cwd) {
       return;
     }
 
-    let remoteUrl = '';
-    try {
-      const { stdout } = await execAsync('git remote get-url origin', getExecOptions(cwd));
-      remoteUrl = stdout.trim();
-    } catch {
-      vscode.window.showErrorMessage('No "origin" git remote found.');
+    const remoteUrl = await getGitRemoteUrl(cwd);
+    if (!remoteUrl) {
+      vscode.window.showErrorMessage('No git remote found.');
       return;
     }
 
@@ -691,7 +776,7 @@ function getMainSidebarHtml(): string {
       margin-bottom: 4px;
       font-size: 12px;
     }
-    input[type="text"], textarea, select {
+    input[type="text"], select {
       width: 100%;
       box-sizing: border-box;
       padding: 6px 8px;
@@ -702,13 +787,78 @@ function getMainSidebarHtml(): string {
       font-family: inherit;
       font-size: inherit;
     }
-    input[type="text"]:focus, textarea:focus, select:focus {
+    input[type="text"]:focus, select:focus {
       outline: 1px solid var(--vscode-focusBorder);
       border-color: var(--vscode-focusBorder);
     }
-    textarea {
+    .markdown-editor {
+      border: 1px solid var(--vscode-input-border, #3c3c3c);
+      border-radius: 2px;
+      background: var(--vscode-input-background);
+      overflow: hidden;
+    }
+    .markdown-editor:focus-within {
+      outline: 1px solid var(--vscode-focusBorder);
+      border-color: var(--vscode-focusBorder);
+    }
+    .md-toolbar {
+      display: flex;
+      align-items: center;
+      flex-wrap: wrap;
+      gap: 2px;
+      padding: 4px 6px;
+      background: var(--vscode-editorGroupHeader-tabsBackground, var(--vscode-editor-background));
+      border-bottom: 1px solid var(--vscode-input-border, #3c3c3c);
+    }
+    .md-toolbar select {
+      background: var(--vscode-dropdown-background);
+      color: var(--vscode-dropdown-foreground);
+      border: 1px solid var(--vscode-dropdown-border, #3c3c3c);
+      padding: 2px 4px;
+      font-size: 11px;
+      border-radius: 2px;
+      width: auto;
+    }
+    .md-btn {
+      background: transparent;
+      color: var(--vscode-foreground);
+      border: 1px solid transparent;
+      padding: 2px 6px;
+      font-size: 11px;
+      cursor: pointer;
+      border-radius: 2px;
+      font-family: inherit;
+    }
+    .md-btn:hover {
+      background: var(--vscode-toolbar-hoverBackground, rgba(128,128,128,0.2));
+    }
+    .md-separator {
+      width: 1px;
+      height: 14px;
+      background: var(--vscode-panel-border, #3c3c3c);
+      margin: 0 4px;
+    }
+    .markdown-editor textarea {
+      border: none;
+      outline: none;
+      background: transparent;
+      padding: 8px;
       resize: vertical;
-      min-height: 60px;
+      min-height: 90px;
+      width: 100%;
+      box-sizing: border-box;
+      color: var(--vscode-input-foreground);
+      font-family: inherit;
+      font-size: inherit;
+    }
+    .md-footer {
+      display: flex;
+      justify-content: flex-end;
+      padding: 3px 8px;
+      background: var(--vscode-editorGroupHeader-tabsBackground, var(--vscode-editor-background));
+      border-top: 1px solid var(--vscode-input-border, #3c3c3c);
+      font-size: 10px;
+      color: var(--vscode-descriptionForeground);
     }
     .badge {
       display: inline-block;
@@ -830,6 +980,7 @@ function getMainSidebarHtml(): string {
 
   <script>
     const vscode = acquireVsCodeApi();
+    const LF = String.fromCharCode(10);
 
     function selectTab(tab) {
       document.getElementById('btnMr').classList.toggle('active', tab === 'mr');
@@ -849,11 +1000,120 @@ function getMainSidebarHtml(): string {
         document.getElementById('btnMr').classList.remove('active');
         document.getElementById('btnTag').classList.remove('active');
         document.getElementById('formContainer').innerHTML = '<div class="empty-state">' + (msg.message || 'Select an action above to get started.') + '</div>';
+      } else if (msg.command === 'replacePlaceholder') {
+        const ta = document.getElementById('description');
+        if (ta && msg.placeholder) {
+          ta.value = ta.value.replace(msg.placeholder, msg.markdown || '');
+        }
       }
     });
 
+    function getTextArea() {
+      return document.getElementById('description');
+    }
+
+    function wrapText(before, after) {
+      const ta = getTextArea();
+      if (!ta) return;
+      const start = ta.selectionStart;
+      const end = ta.selectionEnd;
+      const val = ta.value;
+      const selected = val.substring(start, end) || 'text';
+      ta.value = val.substring(0, start) + before + selected + after + val.substring(end);
+      ta.focus();
+      ta.setSelectionRange(start + before.length, start + before.length + selected.length);
+    }
+
+    function insertHeading(prefix) {
+      const ta = getTextArea();
+      if (!ta) return;
+      const start = ta.selectionStart;
+      const val = ta.value;
+      const lineStart = val.lastIndexOf(LF, start - 1) + 1;
+      ta.value = val.substring(0, lineStart) + prefix + val.substring(lineStart);
+      ta.focus();
+      ta.setSelectionRange(lineStart + prefix.length, lineStart + prefix.length);
+    }
+
+    function prefixLines(prefix) {
+      const ta = getTextArea();
+      if (!ta) return;
+      const start = ta.selectionStart;
+      const end = ta.selectionEnd;
+      const val = ta.value;
+      const lineStart = val.lastIndexOf(LF, start - 1) + 1;
+      const lineEnd = val.indexOf(LF, end);
+      const actualEnd = lineEnd === -1 ? val.length : lineEnd;
+      const lines = val.substring(lineStart, actualEnd).split(LF);
+      const prefixed = lines.map(function(l) { return prefix + l; }).join(LF);
+      ta.value = val.substring(0, lineStart) + prefixed + val.substring(actualEnd);
+      ta.focus();
+    }
+
+    function insertLink() {
+      const ta = getTextArea();
+      if (!ta) return;
+      const start = ta.selectionStart;
+      const end = ta.selectionEnd;
+      const val = ta.value;
+      const selected = val.substring(start, end) || 'link text';
+      const insertion = '[' + selected + '](url)';
+      ta.value = val.substring(0, start) + insertion + val.substring(end);
+      ta.focus();
+      ta.setSelectionRange(start + selected.length + 3, start + selected.length + 6);
+    }
+
+    function handleFileSelect(e) {
+      const file = e.target.files && e.target.files[0];
+      if (file) {
+        uploadFile(file);
+      }
+      e.target.value = '';
+    }
+
+    function uploadFile(file) {
+      const ta = getTextArea();
+      if (!ta) return;
+      const start = ta.selectionStart;
+      const placeholder = '![Uploading ' + (file.name || 'image') + '...]()' + LF;
+      ta.value = ta.value.substring(0, start) + placeholder + ta.value.substring(start);
+
+      const reader = new FileReader();
+      reader.onload = function(event) {
+        const base64Data = event.target.result.split(',')[1];
+        vscode.postMessage({
+          command: 'uploadImage',
+          file: {
+            name: file.name || 'image.png',
+            mimeType: file.type || 'image/png',
+            base64: base64Data,
+            placeholder: placeholder
+          }
+        });
+      };
+      reader.readAsDataURL(file);
+    }
+
     function bindEvents(tab) {
       if (tab === 'mr') {
+        const ta = document.getElementById('description');
+        if (ta) {
+          ta.addEventListener('paste', (e) => {
+            const items = e.clipboardData && e.clipboardData.items;
+            if (!items) return;
+            for (let i = 0; i < items.length; i++) {
+              if (items[i].type.indexOf('image') !== -1) {
+                e.preventDefault();
+                const file = items[i].getAsFile();
+                if (file) {
+                  uploadFile(file);
+                }
+                break;
+              }
+            }
+          });
+        }
+
         const form = document.getElementById('mrForm');
         if (form) {
           form.addEventListener('submit', (e) => {
@@ -977,7 +1237,31 @@ function getMrFormHtml(init: {
 
       <div class="field">
         <label for="description">Description</label>
-        <textarea id="description" rows="3"></textarea>
+        <div class="markdown-editor">
+          <div class="md-toolbar">
+            <select onchange="insertHeading(this.value); this.value='';">
+              <option value="" disabled selected>Normal text</option>
+              <option value="# ">Heading 1</option>
+              <option value="## ">Heading 2</option>
+              <option value="### ">Heading 3</option>
+            </select>
+            <div class="md-separator"></div>
+            <button type="button" class="md-btn" title="Bold" onclick="wrapText('**', '**')"><b>B</b></button>
+            <button type="button" class="md-btn" title="Italic" onclick="wrapText('*', '*')"><i>I</i></button>
+            <button type="button" class="md-btn" title="Strikethrough" onclick="wrapText('~~', '~~')"><del>S</del></button>
+            <div class="md-separator"></div>
+            <button type="button" class="md-btn" title="Bullet list" onclick="prefixLines('- ')">&bull; List</button>
+            <button type="button" class="md-btn" title="Task list" onclick="prefixLines('- [ ] ')">&#x2611; Task</button>
+            <button type="button" class="md-btn" title="Code" onclick="wrapText('\\x60', '\\x60')">&lt;/&gt;</button>
+            <button type="button" class="md-btn" title="Link" onclick="insertLink()">&#x1F517;</button>
+            <button type="button" class="md-btn" title="Attach Image" onclick="document.getElementById('imageFilePicker').click()">&#x1F4CE;</button>
+          </div>
+          <textarea id="description" rows="5" placeholder="Describe the goal of the changes and what reviewers should be aware of."></textarea>
+          <input type="file" id="imageFilePicker" accept="image/*" style="display:none;" onchange="handleFileSelect(event)" />
+          <div class="md-footer">
+            <span>Markdown supported (Paste or attach images)</span>
+          </div>
+        </div>
       </div>
 
       <div class="field">
